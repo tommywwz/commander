@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::io::{stdout, Write};
+use std::fs;
 
 /// CLI arguments parsed by clap
 #[derive(Parser)]
@@ -169,6 +170,37 @@ fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
     action
 }
 
+/// Detects OS, distro, and shell, then prepends that context to the base system prompt.
+/// This lets Claude tailor commands to the user's actual environment at runtime.
+fn build_system_prompt(base: &str) -> String {
+    let os = std::env::consts::OS; // "linux", "macos", "windows"
+
+    // On Linux, read /etc/os-release to get the distro name (e.g. "Ubuntu 24.04")
+    let distro = if os == "linux" {
+        fs::read_to_string("/etc/os-release")
+            .ok()
+            .and_then(|contents| {
+                contents
+                    .lines()
+                    .find(|l| l.starts_with("PRETTY_NAME="))
+                    .map(|l| l.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string())
+            })
+            .unwrap_or_else(|| "Linux".to_string())
+    } else {
+        os.to_string()
+    };
+
+    // Read the current shell from $SHELL (e.g. /bin/zsh → zsh)
+    let shell = env::var("SHELL")
+        .ok()
+        .and_then(|s| s.split('/').last().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown shell".to_string());
+
+    format!(
+        "The user's environment:\n- OS: {distro}\n- Shell: {shell}\n\nTailor all commands to this environment.\n\n{base}"
+    )
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -183,7 +215,7 @@ fn main() {
     let request_body = ApiRequest {
         model: "claude-haiku-4-5-20251001".to_string(),
         max_tokens: 256,
-        system: include_str!("../config/system_prompt.md").to_string(),
+        system: build_system_prompt(include_str!("../config/system_prompt.md")),
         messages: vec![Message {
             role: "user".to_string(),
             content: args.cmd.clone(),
