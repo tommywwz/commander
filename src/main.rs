@@ -1,11 +1,18 @@
 use arboard::Clipboard;
 use clap::Parser;
 use colored::Colorize;
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    execute,
+    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
+    terminal::{self, ClearType},
+};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::io::{self, Write};
+use std::io::{stdout, Write};
 
 /// CLI arguments parsed by clap
 #[derive(Parser)]
@@ -44,6 +51,122 @@ struct ContentBlock {
 #[derive(Deserialize)]
 struct ApiResponse {
     content: Vec<ContentBlock>,
+}
+
+/// A parsed command with its optional inline comment
+struct Command {
+    cmd: String,
+    comment: Option<String>,
+}
+
+/// What the user chose to do with the selected command
+enum Action {
+    Run(String),
+    Copy(String),
+    Quit,
+}
+
+/// Renders an interactive menu where the user can navigate with arrow keys,
+/// press Enter to run the highlighted command, or 'c' to copy it.
+fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
+    let count = commands.len();
+    let mut selected: usize = 0;
+    let mut stdout = stdout();
+
+    terminal::enable_raw_mode().unwrap();
+
+    // Save the cursor position so we can redraw the menu in place
+    execute!(stdout, cursor::SavePosition).unwrap();
+
+    let action = loop {
+        // Redraw from the saved position each iteration
+        execute!(
+            stdout,
+            cursor::RestorePosition,
+            terminal::Clear(ClearType::FromCursorDown)
+        )
+        .unwrap();
+
+        // Draw each command, highlighting the selected one
+        for i in 0..count {
+            let entry = commands.get(&((i + 1) as u32)).unwrap();
+            let comment_str = entry.comment.as_deref().unwrap_or("");
+            if i == selected {
+                execute!(
+                    stdout,
+                    SetBackgroundColor(Color::Cyan),
+                    SetForegroundColor(Color::Black),
+                    Print(format!(" > {}. {} ", i + 1, entry.cmd)),
+                    ResetColor,
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(format!(" # {}\r\n", comment_str)),
+                    ResetColor
+                )
+                .unwrap();
+            } else {
+                execute!(
+                    stdout,
+                    SetForegroundColor(Color::Reset),
+                    Print(format!("   {}. {} ", i + 1, entry.cmd)),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(format!(" # {}\r\n", comment_str)),
+                    ResetColor
+                )
+                .unwrap();
+            }
+        }
+
+        // Key hint bar
+        execute!(
+            stdout,
+            Print("\r\n"),
+            SetForegroundColor(Color::DarkGrey),
+            Print(" [↑↓] Navigate   [Enter] Run   [c] Copy   [q] Quit"),
+            ResetColor
+        )
+        .unwrap();
+
+        stdout.flush().unwrap();
+
+        // Block until a key event arrives
+        if let Event::Key(key) = event::read().unwrap() {
+            match key.code {
+                KeyCode::Up => {
+                    if selected > 0 {
+                        selected -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if selected < count - 1 {
+                        selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    let cmd = commands.get(&((selected + 1) as u32)).unwrap().cmd.clone();
+                    break Action::Run(cmd);
+                }
+                KeyCode::Char('c') => {
+                    let cmd = commands.get(&((selected + 1) as u32)).unwrap().cmd.clone();
+                    break Action::Copy(cmd);
+                }
+                KeyCode::Char('q') | KeyCode::Esc => {
+                    break Action::Quit;
+                }
+                _ => {}
+            }
+        }
+    };
+
+    // Always restore normal terminal mode before returning
+    terminal::disable_raw_mode().unwrap();
+    execute!(
+        stdout,
+        cursor::RestorePosition,
+        terminal::Clear(ClearType::FromCursorDown)
+    )
+    .unwrap();
+
+    action
 }
 
 fn main() {
@@ -101,7 +224,7 @@ fn main() {
                 Ok(api_response) => {
                     // Parse numbered commands from the response text into a HashMap
                     // Expected format: "1. some-command   # description"
-                    let mut commands: HashMap<u32, String> = HashMap::new();
+                    let mut commands: HashMap<u32, Command> = HashMap::new();
                     for block in &api_response.content {
                         if block.block_type == "text" {
                             if let Some(text) = &block.text {
@@ -111,9 +234,15 @@ fn main() {
                                         let num_str = &line[..dot_pos];
                                         if let Ok(num) = num_str.trim().parse::<u32>() {
                                             let rest = &line[dot_pos + 2..];
-                                            // Strip the inline comment (everything after " #")
-                                            let command = rest.split(" #").next().unwrap_or(rest).trim();
-                                            commands.insert(num, command.to_string());
+                                            // Split command and inline comment on " #"
+                                            let (cmd_part, comment_part) = match rest.split_once(" #") {
+                                                Some((c, comment)) => (c.trim(), Some(comment.trim().to_string())),
+                                                None => (rest.trim(), None),
+                                            };
+                                            commands.insert(num, Command {
+                                                cmd: cmd_part.to_string(),
+                                                comment: comment_part,
+                                            });
                                         }
                                     }
                                 }
@@ -126,22 +255,20 @@ fn main() {
                         std::process::exit(1);
                     }
 
-                    // Print commands in order
-                    for i in 1..=commands.len() as u32 {
-                        if let Some(cmd) = commands.get(&i) {
-                            println!("{}  {}", format!("{i}.").bright_blue().bold(), cmd.green());
+                    // Show interactive menu and handle the user's choice
+                    match interactive_menu(&commands) {
+                        Action::Run(cmd) => {
+                            println!("{} {}\n", "Running:".bright_green().bold(), cmd.bold());
+                            std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(&cmd)
+                                .status()
+                                .unwrap_or_else(|e| {
+                                    eprintln!("{} {e}", "Failed to run command:".red());
+                                    std::process::exit(1);
+                                });
                         }
-                    }
-
-                    // Prompt the user to pick a command to copy
-                    print!("\n{}", "Enter number to copy to clipboard: ".yellow());
-                    io::stdout().flush().unwrap();
-
-                    let mut input = String::new();
-                    io::stdin().read_line(&mut input).unwrap();
-
-                    if let Ok(choice) = input.trim().parse::<u32>() {
-                        if let Some(cmd) = commands.get(&choice) {
+                        Action::Copy(cmd) => {
                             match Clipboard::new() {
                                 Ok(mut cb) => {
                                     if let Err(e) = cb.set_text(cmd.clone()) {
@@ -154,11 +281,10 @@ fn main() {
                                 }
                                 Err(e) => eprintln!("{} {e}", "Failed to open clipboard:".red()),
                             }
-                        } else {
-                            eprintln!("{}", "Invalid selection.".red());
                         }
-                    } else {
-                        eprintln!("{}", "Invalid input.".red());
+                        Action::Quit => {
+                            println!("{}", "Cancelled.".dimmed());
+                        }
                     }
                 }
             }
