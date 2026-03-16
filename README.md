@@ -1,6 +1,6 @@
 # commander
 
-A Linux terminal tool that translates natural language into shell commands using the Claude AI API.
+A terminal tool that translates natural language into shell commands using the Claude AI API.
 
 ## Usage
 
@@ -39,6 +39,8 @@ cargo install --path .
 
 This builds a release binary and installs it to `~/.cargo/bin/commander`. Make sure `~/.cargo/bin` is in your `$PATH`.
 
+On Windows, the binary is installed to `%USERPROFILE%\\.cargo\\bin\\commander.exe`. Make sure `%USERPROFILE%\\.cargo\\bin` is in your `PATH`.
+
 ## Setup
 
 Export your Anthropic API key before running:
@@ -48,6 +50,36 @@ export ANTHROPIC_API_KEY=your_key_here
 ```
 
 To make it permanent, add the line above to your `~/.bashrc` or `~/.zshrc`.
+
+### Windows Setup
+
+Set your Anthropic API key before running:
+
+**PowerShell (current session):**
+
+```powershell
+$env:ANTHROPIC_API_KEY="your_key_here"
+```
+
+**PowerShell (persist for future sessions):**
+
+```powershell
+[Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "your_key_here", "User")
+```
+
+Restart PowerShell after setting a persistent variable.
+
+**Command Prompt (current session):**
+
+```cmd
+set ANTHROPIC_API_KEY=your_key_here
+```
+
+Run example on Windows:
+
+```powershell
+commander.exe --cmd "List files in this folder"
+```
 
 ## Examples
 

@@ -3,7 +3,7 @@ use clap::Parser;
 use colored::Colorize;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{self, ClearType},
@@ -12,7 +12,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::io::{stdout, Write};
+use std::io::{stdin, stdout, IsTerminal, Write};
 use std::fs;
 
 /// CLI arguments parsed by clap
@@ -71,14 +71,89 @@ enum Action {
     Quit,
 }
 
+fn sorted_command_keys(commands: &HashMap<u32, Command>) -> Vec<u32> {
+    let mut keys: Vec<u32> = commands.keys().copied().collect();
+    keys.sort_unstable();
+    keys
+}
+
+fn prompt_menu(commands: &HashMap<u32, Command>) -> Action {
+    let keys = sorted_command_keys(commands);
+
+    println!("{}", "Choose an option:".cyan().bold());
+    for (idx, key) in keys.iter().enumerate() {
+        let entry = &commands[key];
+        let comment = entry.comment.as_deref().unwrap_or("");
+        if comment.is_empty() {
+            println!("  {}. {}", idx + 1, entry.cmd);
+        } else {
+            println!("  {}. {} {} {}", idx + 1, entry.cmd, "#".dimmed(), comment.dimmed());
+        }
+    }
+
+    println!("\n{}", "Enter a number to run, 'c <number>' to copy, or 'q' to quit.".dimmed());
+
+    let mut line = String::new();
+    loop {
+        print!("> ");
+        stdout().flush().ok();
+
+        line.clear();
+        if stdin().read_line(&mut line).is_err() {
+            return Action::Quit;
+        }
+
+        let input = line.trim();
+        if input.eq_ignore_ascii_case("q") {
+            return Action::Quit;
+        }
+
+        if let Some(rest) = input.strip_prefix('c').or_else(|| input.strip_prefix('C')) {
+            let num = rest.trim().parse::<usize>();
+            if let Ok(idx) = num {
+                if (1..=keys.len()).contains(&idx) {
+                    let cmd = commands[&keys[idx - 1]].cmd.clone();
+                    return Action::Copy(cmd);
+                }
+            }
+            println!("{}", "Invalid copy selection. Use: c <number>".yellow());
+            continue;
+        }
+
+        let num = input.parse::<usize>();
+        if let Ok(idx) = num {
+            if (1..=keys.len()).contains(&idx) {
+                let cmd = commands[&keys[idx - 1]].cmd.clone();
+                return Action::Run(cmd);
+            }
+        }
+
+        println!("{}", "Invalid selection. Enter a listed number, c <number>, or q.".yellow());
+    }
+}
+
 /// Renders an interactive menu where the user can navigate with arrow keys,
 /// press Enter to run the highlighted command, or 'c' to copy it.
 fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
-    let count = commands.len();
+    let keys = sorted_command_keys(commands);
+    let count = keys.len();
+
+    if count == 0 {
+        return Action::Quit;
+    }
+
+    // Raw key handling requires a real terminal. In some Windows contexts
+    // (IDE output panes / non-TTY), fallback to a line-based prompt.
+    if !stdin().is_terminal() || !stdout().is_terminal() {
+        return prompt_menu(commands);
+    }
+
     let mut selected: usize = 0;
     let mut stdout = stdout();
 
-    terminal::enable_raw_mode().unwrap();
+    if terminal::enable_raw_mode().is_err() {
+        return prompt_menu(commands);
+    }
 
     // count lines = one per command + blank line + hint line
     let menu_height = (count + 2) as u16;
@@ -104,7 +179,7 @@ fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
 
         // Draw each command, highlighting the selected one
         for i in 0..count {
-            let entry = commands.get(&((i + 1) as u32)).unwrap();
+            let entry = &commands[&keys[i]];
             let comment_str = entry.comment.as_deref().unwrap_or("");
             if i == selected {
                 execute!(
@@ -145,6 +220,10 @@ fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
 
         // Block until a key event arrives
         if let Event::Key(key) = event::read().unwrap() {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+
             match key.code {
                 KeyCode::Up => {
                     if selected > 0 {
@@ -157,11 +236,11 @@ fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
                     }
                 }
                 KeyCode::Enter => {
-                    let cmd = commands.get(&((selected + 1) as u32)).unwrap().cmd.clone();
+                    let cmd = commands[&keys[selected]].cmd.clone();
                     break Action::Run(cmd);
                 }
                 KeyCode::Char('c') => {
-                    let cmd = commands.get(&((selected + 1) as u32)).unwrap().cmd.clone();
+                    let cmd = commands[&keys[selected]].cmd.clone();
                     break Action::Copy(cmd);
                 }
                 KeyCode::Char('q') | KeyCode::Esc => {
@@ -324,7 +403,7 @@ fn main() {
                         Action::Run(cmd) => {
                             println!("{} {}\n", "Running:".bright_green().bold(), cmd.bold());
                             let (shell, flag) = if cfg!(target_os = "windows") {
-                                ("cmd", "/C")
+                                ("powershell", "-Command")
                             } else {
                                 ("sh", "-c")
                             };
