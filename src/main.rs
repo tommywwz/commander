@@ -286,9 +286,11 @@ fn main() {
                     // Parse numbered commands from the response text into a HashMap
                     // Expected format: "1. some-command   # description"
                     let mut commands: HashMap<u32, Command> = HashMap::new();
+                    let mut raw_text = String::new();
                     for block in &api_response.content {
                         if block.block_type == "text" {
                             if let Some(text) = &block.text {
+                                raw_text.push_str(text);
                                 for line in text.lines() {
                                     // Find the ". " separator between the number and command
                                     if let Some(dot_pos) = line.find(". ") {
@@ -312,8 +314,9 @@ fn main() {
                     }
 
                     if commands.is_empty() {
-                        eprintln!("{}", "Could not parse any commands from response.".red());
-                        std::process::exit(1);
+                        println!("{}", "Unparseable response:".yellow().bold());
+                        println!("{}", raw_text.trim());
+                        return;
                     }
 
                     // Show interactive menu and handle the user's choice
