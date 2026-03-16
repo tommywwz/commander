@@ -20,8 +20,12 @@ use std::fs;
 #[command(name = "commander", about = "Translate natural language to shell commands using Claude AI")]
 struct Args {
     /// Describe what you want to do (e.g. "show files in current directory")
-    #[arg(short, long)]
-    cmd: String,
+    #[arg(short, long, required_unless_present = "print_prompt")]
+    cmd: Option<String>,
+
+    /// Print the resolved system prompt and exit (for debugging)
+    #[arg(long)]
+    print_prompt: bool,
 }
 
 /// A single message in the conversation (role + content)
@@ -204,6 +208,14 @@ fn build_system_prompt(base: &str) -> String {
 fn main() {
     let args = Args::parse();
 
+    let system_prompt = build_system_prompt(include_str!("../config/system_prompt.md"));
+
+    // Debug flag: print the resolved system prompt and exit without calling the API
+    if args.print_prompt {
+        println!("{}\n{}", "--- System Prompt ---".yellow().bold(), system_prompt);
+        return;
+    }
+
     // Read API key from environment — exits early with a helpful message if missing
     let api_key = env::var("ANTHROPIC_API_KEY").unwrap_or_else(|_| {
         eprintln!("{}", "Error: ANTHROPIC_API_KEY environment variable not set.".red());
@@ -211,20 +223,22 @@ fn main() {
         std::process::exit(1);
     });
 
+    let cmd = args.cmd.unwrap();
+
     // Build the API request: model, token limit, system prompt (embedded at compile time), and user message
     let request_body = ApiRequest {
         model: "claude-haiku-4-5-20251001".to_string(),
         max_tokens: 256,
-        system: build_system_prompt(include_str!("../config/system_prompt.md")),
+        system: system_prompt,
         messages: vec![Message {
             role: "user".to_string(),
-            content: args.cmd.clone(),
+            content: cmd.clone(),
         }],
     };
 
     let client = Client::new();
 
-    println!("{} {}\n", "Asking Claude for commands to:".cyan(), args.cmd.bold());
+    println!("{} {}\n", "Asking Claude for commands to:".cyan(), cmd.bold());
 
     // Send the request to the Anthropic API
     let response = client
