@@ -29,21 +29,15 @@ Asking Claude for commands to: Show me the files under this directory
 - [Rust](https://rustup.rs/) (1.70 or later)
 - An [Anthropic API key](https://console.anthropic.com/)
 
-### Build
+### Install
 
 ```bash
 git clone <repo-url>
 cd commander
-cargo build --release
-```
-
-The binary will be at `./target/release/commander`.
-
-### Install globally (optional)
-
-```bash
 cargo install --path .
 ```
+
+This builds a release binary and installs it to `~/.cargo/bin/commander`. Make sure `~/.cargo/bin` is in your `$PATH`.
 
 ## Setup
 
@@ -67,7 +61,7 @@ commander --cmd "Download a file from a URL"
 
 ## How It Works
 
-`commander` sends your natural language request to the Claude API (`claude-opus-4-6`), which responds with practical shell commands and brief explanations. When multiple approaches exist, Claude returns a numbered list of options.
+`commander` sends your natural language request to the Claude API (`claude-haiku-4-5`), which responds with practical shell commands and brief explanations. When multiple approaches exist, Claude returns a numbered list of options you can navigate with arrow keys — press Enter to run, `c` to copy, or `q` to quit.
 
 ## License
 
