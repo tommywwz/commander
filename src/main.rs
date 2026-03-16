@@ -80,14 +80,24 @@ fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
 
     terminal::enable_raw_mode().unwrap();
 
-    // Save the cursor position so we can redraw the menu in place
-    execute!(stdout, cursor::SavePosition).unwrap();
+    // count lines = one per command + blank line + hint line
+    let menu_height = (count + 2) as u16;
+
+    // Reserve space upfront so any terminal scrolling happens now, not during redraws
+    for _ in 0..menu_height {
+        execute!(stdout, Print("\r\n")).unwrap();
+    }
+    execute!(stdout, cursor::MoveUp(menu_height)).unwrap();
+
+    // Capture the absolute row of the anchor after scrolling is done.
+    // All redraws use MoveTo(0, anchor_row) — immune to scroll drift.
+    let (_, anchor_row) = cursor::position().unwrap();
 
     let action = loop {
-        // Redraw from the saved position each iteration
+        // Jump to absolute anchor position and clear everything below
         execute!(
             stdout,
-            cursor::RestorePosition,
+            cursor::MoveTo(0, anchor_row),
             terminal::Clear(ClearType::FromCursorDown)
         )
         .unwrap();
@@ -162,11 +172,11 @@ fn interactive_menu(commands: &HashMap<u32, Command>) -> Action {
         }
     };
 
-    // Always restore normal terminal mode before returning
+    // Restore normal terminal mode and clear the menu
     terminal::disable_raw_mode().unwrap();
     execute!(
         stdout,
-        cursor::RestorePosition,
+        cursor::MoveTo(0, anchor_row),
         terminal::Clear(ClearType::FromCursorDown)
     )
     .unwrap();
