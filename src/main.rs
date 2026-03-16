@@ -204,11 +204,16 @@ fn build_system_prompt(base: &str) -> String {
         os.to_string()
     };
 
-    // Read the current shell from $SHELL (e.g. /bin/zsh → zsh)
-    let shell = env::var("SHELL")
-        .ok()
-        .and_then(|s| s.split('/').last().map(|s| s.to_string()))
-        .unwrap_or_else(|| "unknown shell".to_string());
+    // Read the current shell from $SHELL (e.g. /bin/zsh → zsh) on Unix,
+    // or default to "powershell" on Windows.
+    let shell = if cfg!(target_os = "windows") {
+        "powershell".to_string()
+    } else {
+        env::var("SHELL")
+            .ok()
+            .and_then(|s| s.split('/').last().map(|s| s.to_string()))
+            .unwrap_or_else(|| "unknown shell".to_string())
+    };
 
     format!(
         "The user's environment:\n- OS: {distro}\n- Shell: {shell}\n\nTailor all commands to this environment.\n\n{base}"
@@ -315,9 +320,13 @@ fn main() {
                     match interactive_menu(&commands) {
                         Action::Run(cmd) => {
                             println!("{} {}\n", "Running:".bright_green().bold(), cmd.bold());
-                            std::process::Command::new("sh")
-                                .arg("-c")
-                                .arg(&cmd)
+                            let (shell, flag) = if cfg!(target_os = "windows") {
+                                ("cmd", "/C")
+                            } else {
+                                ("sh", "-c")
+                            };
+                            std::process::Command::new(shell)
+                                .args([flag, &cmd])
                                 .status()
                                 .unwrap_or_else(|e| {
                                     eprintln!("{} {e}", "Failed to run command:".red());
